@@ -12,3 +12,4 @@ public class GmallPublisherApplication {
         SpringApplication.run(GmallPublisherApplication.class, args);
     }
 }
+

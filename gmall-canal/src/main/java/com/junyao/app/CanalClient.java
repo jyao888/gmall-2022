@@ -8,77 +8,89 @@ import com.alibaba.otter.canal.protocol.Message;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.InvalidProtocolBufferException;
 import com.junyao.constants.GmallConstants;
-import com.junyao.utils.MyKafkaSender;
+import com.junyao.utils.MyKafkaSend;
 
 import java.net.InetSocketAddress;
 import java.util.List;
 
 /**
  * @author wjy
- * @create 2022-06-23 16:58
+ * @create 2022-06-26 15:36
  */
 public class CanalClient {
     public static void main(String[] args) throws InvalidProtocolBufferException {
-        //1.获取canal连接对象
+        //1.获取连接器
         CanalConnector canalConnector = CanalConnectors.newSingleConnector(new InetSocketAddress("hadoop102", 11111), "example", "", "");
 
+        //监控binlog变化
         while (true){
-            //2.获取连接
+            //获取链接
             canalConnector.connect();
-
-            //3.指定要监控的数据库
+            //选择订阅的数据库
             canalConnector.subscribe("gmall2022.*");
-
-            //4.获取message
+            //获取多个sql执行结果
             Message message = canalConnector.get(100);
+            //获取一个sql执行的结果
             List<CanalEntry.Entry> entries = message.getEntries();
+            //通过判断list集合中是否有数据，进而判断mysql中是否有数据变化
             if (entries.size()<=0){
-                System.out.println("没有数据,休息一会");
+                //没有数据变化
+                System.out.println("没有数据，休息一会...");
                 try {
                     Thread.sleep(5000);
                 } catch (InterruptedException e) {
                     e.printStackTrace();
                 }
             }else {
+                //有数据变化，获取每一个entry
                 for (CanalEntry.Entry entry : entries) {
-                    //TODO 获取表名
+                    //获取表名
                     String tableName = entry.getHeader().getTableName();
-                    //获取entry类型
+                    //获取EntryType
                     CanalEntry.EntryType entryType = entry.getEntryType();
                     //根据entry类型判断，获取到序列化数据
                     if (CanalEntry.EntryType.ROWDATA.equals(entryType)){
                         //取出序列化数据
                         ByteString storeValue = entry.getStoreValue();
-                        //对数据做反序列化
+                        //对数据进行反序列化
                         CanalEntry.RowChange rowChange = CanalEntry.RowChange.parseFrom(storeValue);
-                        //TODO 获取时间类型
+                        //获取事件类型
                         CanalEntry.EventType eventType = rowChange.getEventType();
-
-                        //TODO 获取具体的数据
+                        //取封装每一行数据的list集合
                         List<CanalEntry.RowData> rowDatasList = rowChange.getRowDatasList();
 
-                        //TODO 根据条件获取数据
-                        handler(tableName, eventType,rowDatasList);
+                        //对数据进行处理
+                        handle(tableName,eventType,rowDatasList);
                     }
+
                 }
+
             }
         }
     }
 
-    private static void handler(String tableName, CanalEntry.EventType eventType, List<CanalEntry.RowData> rowDatasList) {
-        //获取订单表的新增数据
-        if("order_info".equals(tableName) && CanalEntry.EventType.INSERT.equals(eventType)){
+    private static void handle(String tableName, CanalEntry.EventType eventType, List<CanalEntry.RowData> rowDatasList) {
+        //通过表名和类型来判断获取那张表中哪种类型的数据
+        if ("order_info".equals(tableName)&&CanalEntry.EventType.INSERT.equals(eventType)){
+            //获取每一行的数据
             for (CanalEntry.RowData rowData : rowDatasList) {
-                //获取存放列的集合
                 List<CanalEntry.Column> afterColumnsList = rowData.getAfterColumnsList();
-                //获取每个列
+
                 JSONObject jsonObject = new JSONObject();
+
+                //获取每一行中每一列的苏剧
                 for (CanalEntry.Column column : afterColumnsList) {
                     jsonObject.put(column.getName(),column.getValue());
                 }
-                System.out.println(jsonObject.toString());
-                MyKafkaSender.send(GmallConstants.KAFKA_TOPIC_ORDER,jsonObject.toString());
+                //在控制台打印测试
+                System.out.println(jsonObject.toJSONString());
+
+                //将数据发送到Kafka
+                MyKafkaSend.send(GmallConstants.KAFKA_TOPIC_ORDER,jsonObject.toJSONString());
             }
+
+
         }
+
     }
 }

@@ -5,10 +5,10 @@ import java.util.Map;
 
 /**
  * @author wjy
- * @create 2022-06-22 14:51
+ * @create 2022-06-26 16:38
  */
 public interface DauMapper {
-    //获取日活总数数据 方法名要和sql对应的id一致，这样才可以绑定
+    //获取日活总数数据
     public Integer selectDauTotal(String date);
 
     //获取日活分时数据

@@ -3,84 +3,80 @@ package com.junyao.app
 import java.text.SimpleDateFormat
 import java.util.Date
 
-import org.apache.phoenix.spark._
 import com.alibaba.fastjson.JSON
-import com.junyao.bean.StartUpLog
 import com.junyao.constants.GmallConstants
 import com.junyao.handler.DauHandler
-import com.junyao.utils.MyKafkaUtils
+import com.junyao.utils.MyKafkaUtil
+import com.junyao.bean.StartUpLog
 import org.apache.hadoop.hbase.HBaseConfiguration
 import org.apache.kafka.clients.consumer.ConsumerRecord
-import org.apache.spark.{SparkConf, SparkContext}
+import org.apache.spark.SparkConf
 import org.apache.spark.streaming.dstream.{DStream, InputDStream}
 import org.apache.spark.streaming.{Seconds, StreamingContext}
+import org.apache.phoenix.spark._
 
 /**
  * @author wjy
- * @create 2022-06-21 15:25
+ * @create 2022-06-24 13:55
  */
 object DauApp {
-    def main(args: Array[String]): Unit = {
-        //创建sparkConf
-        val sparkConf = new SparkConf().setAppName("DauAPP").setMaster("local[*]")
+  def main(args: Array[String]): Unit = {
+    //创建SparkConf并设置App名称
+    val sparkConf = new SparkConf().setAppName("DauApp").setMaster("local[*]")
+    //创建StreamingContext,该对象是提交SparkStreamingApp的入口,5s是批处理间隔
+    val ssc = new StreamingContext(sparkConf, Seconds(5))
 
-        //创建StreamingContext
-        val ssc = new StreamingContext(sparkConf,Seconds(3))
+    //通过Kafka消费工具类 获取STARTUP主题里的数据
+    val kafkaDStream: InputDStream[ConsumerRecord[String, String]] = MyKafkaUtil.getKafkaStream(GmallConstants.KAFKA_TOPIC_STARTUP, ssc)
 
-        //通过kafka工具类消费启动日志数据
-        val kafkaDStream: InputDStream[ConsumerRecord[String, String]] = MyKafkaUtils.getKafkaStream(GmallConstants.KAFKA_TOPIC_STARTUP, ssc)
+//    kafkaDStream.foreachRDD(rdd=>{
+//      rdd.foreach(recode=>{
+//        println(recode.value())
+//      })
+//    })
 
-        //4.将消费到的json字符串转为样例类，为了方便操作，并补全logdate&logHour这两个字段
-        val sdf = new SimpleDateFormat("yyyy-MM-dd HH")
-        val startUpLogDStream: DStream[StartUpLog] = kafkaDStream.mapPartitions(partition => {
-            partition.map(recode => {
-                //将json字符串转为样例类
-                val startUpLog: StartUpLog = JSON.parseObject(recode.value(), classOf[StartUpLog])
+    //4.将消费到的json字符串转为样例类，为了方便操作，并补全logdate&logHour这两个字段
+    val sdf = new SimpleDateFormat("yyyy-MM-dd HH")
+    val startUpLogDStream: DStream[StartUpLog] = kafkaDStream.mapPartitions(partition => {
+      partition.map(recode => {
+        val startUpLog: StartUpLog = JSON.parseObject(recode.value(), classOf[StartUpLog])
 
-                //补全两个字段
-                val times: String = sdf.format(new Date(startUpLog.ts))
-                startUpLog.logDate = times.split(" ")(0)
-                startUpLog.logHour = times.split(" ")(1)
-                startUpLog
-            })
-        })
-        //缓存数据
-        startUpLogDStream.cache()
+        //获取指定格式的时间字符串 yyy-MM-dd HH
+        val times: String = sdf.format(new Date(startUpLog.ts))
 
-        //打印原始数据条数
-        startUpLogDStream.count().print()
+        //补全两个字段 logdate loghour
+        startUpLog.logDate = times.split(" ")(0)
+        startUpLog.logHour = times.split(" ")(1)
 
-        //5、对相同日期相同mid的数据做批次间去重
-        val filterByRedisDStream: DStream[StartUpLog] = DauHandler.filterByRedis(startUpLogDStream, ssc.sparkContext)
-        //缓存数据
-        filterByRedisDStream.cache()
+        startUpLog
+      })
+    })
+    //缓存优化
+    startUpLogDStream.cache()
 
-        //打印经过批次间去重后的数据条数
-        filterByRedisDStream.count().print()
+    //对相同日期相同mid的数据做批次间去重
+    val filterByRedisDStream: DStream[StartUpLog] = DauHandler.filterByRedis(startUpLogDStream, ssc.sparkContext)
+    filterByRedisDStream.cache()
 
-        //6、再对经过批次间去重的数据做批次内去重（先批次间后批次内->总的处理数据量会更少）
-        val filterByGroupDStream: DStream[StartUpLog] = DauHandler.filterByGroup(filterByRedisDStream)
-        filterByGroupDStream.cache()
-        filterByGroupDStream.count().print()
+    //再对经过批次间去重后的数据做批次内去重
+    val filterByGroupDStream: DStream[StartUpLog] = DauHandler.filterByGroup(filterByRedisDStream)
+    filterByGroupDStream.cache()
 
-        //7、将经历两次去重后的mid写入Redis,目的是为了方便批次间去重，拿当前批次数据对比上一批次数据（缓存在redis中）
-        DauHandler.saveToRedis(filterByGroupDStream)
+    //将最终去重后的mid缓存到redis里面 方便批次间去重
+    DauHandler.saveToRedis(filterByGroupDStream);
 
-        //将最终去重后的明细数据写入HBase（具有幂等性）
-        filterByGroupDStream.foreachRDD(rdd=>{
-            rdd.saveToPhoenix(
-                "GMALL2022_DAU",
-                Seq("MID", "UID", "APPID", "AREA", "OS", "CH", "TYPE", "VS", "LOGDATE", "LOGHOUR", "TS"),
-                HBaseConfiguration.create,
-                Some("hadoop102,hadoop103,hadoop104:2181")
-            )
-        })
+    //将最终去重后的明细数据写入Hbase
+    filterByGroupDStream.foreachRDD(rdd=>{
+      rdd.saveToPhoenix(
+        "GMALL2022_DAU",
+        Seq("MID", "UID", "APPID", "AREA", "OS", "CH", "TYPE", "VS", "LOGDATE", "LOGHOUR", "TS"),
+        HBaseConfiguration.create,
+        Some("hadoop102,hadoop103,hadoop104:2181"))
+    })
 
-        //打印测试
-        //startUpLogDStream.print()
+    //启动并阻塞
+    ssc.start()
+    ssc.awaitTermination()
+  }
 
-        //启动并阻塞
-        ssc.start()
-        ssc.awaitTermination()
-    }
 }

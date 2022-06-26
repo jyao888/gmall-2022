@@ -2,7 +2,7 @@ package com.junyao.bean
 
 /**
  * @author wjy
- * @create 2022-06-21 15:24
+ * @create 2022-06-24 13:54
  */
 case class StartUpLog(mid:String,
                       uid:String,

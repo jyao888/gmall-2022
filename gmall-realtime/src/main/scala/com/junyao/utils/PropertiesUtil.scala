@@ -5,14 +5,13 @@ import java.util.Properties
 
 /**
  * @author wjy
- * @create 2022-06-20 22:37
+ * @create 2022-06-24 12:34
  */
 object PropertiesUtil {
-
-  def load(Properties:String)= {
-    val prop = new Properties
-    prop.load(new InputStreamReader(Thread.currentThread().getContextClassLoader.getResourceAsStream(Properties),"UTF-8"))
-    prop
+  //读取配置文件
+  def load(propertiesName:String) = {
+    val props = new Properties()
+    props.load(new InputStreamReader(Thread.currentThread().getContextClassLoader.getResourceAsStream("propertiesName"),"UTF-8"))
+    props
   }
-
 }
